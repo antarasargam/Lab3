@@ -6,6 +6,7 @@ from playground.network.packet import PacketType
 from playground.network.packet.fieldtypes import UINT32, STRING, UINT64, UINT16, UINT8, BUFFER, LIST
 from playground.network.packet.fieldtypes.attributes import Optional
 from playground.network.common.Protocol import StackingProtocol, StackingProtocolFactory, StackingTransport
+from clientcertfactory import getCertsForAddr, getPrivateKeyForAddr, getIDCertsForAddr, getRootCertsForAddr
 import sys
 import os
 from cryptography import x509
@@ -52,12 +53,12 @@ class PlsData(BasePacketType):
     ]
 
 
-class PlsClose(BasePacketType):
+'''class PlsClose(BasePacketType):
     DEFINITION_IDENTIFIER = "netsecfall2017.pls.close"
     DEFINITION_VERSION = "1.0"
     FIELDS = [
         ("Error", STRING(Optional))
-    ]
+    ]'''
 
 
 class PLSStackingTransport(StackingTransport):
@@ -65,16 +66,25 @@ class PLSStackingTransport(StackingTransport):
 
 
 class PLSClient(StackingProtocol):
-    def __init__(self):
+    def __init__(self, loop):
+        print("###PLSClient init###")
         self.deserializer = BasePacketType.Deserializer()
         self.transport = None
+        self.loop = loop
 
     def connection_made(self, transport):
+        print("###PLSClient connection made###")
         self.transport = transport
         clienthello = PlsHello()
-        clienthello.Nonce = os.urandom(8)
-        clienthello.Certs = []
+        clienthello.Nonce = 12345678
+        idcert = getIDCertsForAddr()
+        pubkey = getCertsForAddr()
+        root = getRootCertsForAddr()
+        clienthello.Certs.append(idcert)
+        clienthello.Certs.append(pubkey)
+        clienthello.Certs.append(root)
         packs = clienthello.__serialize__()
+        print("Sent the Client hello.")
         self.transport.write(packs)
 
     def validate(self, certificate):
@@ -94,6 +104,23 @@ class PLSClient(StackingProtocol):
 
 
 
+    def connection_lost(self,exc):
+        self.transport.close()
+        self.loop.stop()
+        self.transport = None
 
+if __name__ == "__main__":
 
+    loop = asyncio.get_event_loop()
+
+    Clientfactory = StackingProtocolFactory(lambda: PLSClient(loop))
+
+    coro = playground.getConnector().create_playground_connection(Clientfactory, '20174.1.1.1', 8888)
+    loop.run_until_complete(coro)
+    try:
+        loop.run_forever()
+    except KeyboardInterrupt:
+        pass
+
+    loop.close()
 
