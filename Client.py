@@ -3,7 +3,7 @@ import playground
 import random, zlib, logging
 from playground import getConnector
 from playground.network.packet import PacketType
-from playground.network.packet.fieldtypes import UINT32, STRING, UINT64, UINT16, UINT8, BUFFER, LIST
+from playground.network.packet.fieldtypes import UINT32, STRING, UINT64, UINT16, UINT8, BUFFER, LIST, ListFieldType
 from playground.network.packet.fieldtypes.attributes import Optional
 from playground.network.common.Protocol import StackingProtocol, StackingProtocolFactory, StackingTransport
 from clientcertfactory import getCertsForAddr, getPrivateKeyForAddr, getIDCertsForAddr, getRootCertsForAddr
@@ -11,6 +11,7 @@ import sys
 import os
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
+from OpenSSL import crypto
 
 
 class BasePacketType(PacketType):
@@ -23,7 +24,7 @@ class PlsHello(BasePacketType):
     DEFINITION_VERSION = "1.0"
     FIELDS = [
         ("Nonce", UINT64),
-        ("Certs", LIST(BUFFER))
+        ("Certs", LIST(STRING))
     ]
 
 
@@ -67,7 +68,7 @@ class PLSStackingTransport(StackingTransport):
 
 class PLSClient(StackingProtocol):
     def __init__(self, loop):
-        print("###PLSClient init###")
+        print("###PLSClient init###\n")
         self.deserializer = BasePacketType.Deserializer()
         self.transport = None
         self.loop = loop
@@ -80,28 +81,47 @@ class PLSClient(StackingProtocol):
         idcert = getIDCertsForAddr()
         pubkey = getCertsForAddr()
         root = getRootCertsForAddr()
+        clienthello.Certs = []
         clienthello.Certs.append(idcert)
         clienthello.Certs.append(pubkey)
         clienthello.Certs.append(root)
-        packs = clienthello.__serialize__()
-        print("Sent the Client hello.")
-        self.transport.write(packs)
+        clhello = clienthello.__serialize__()
+        print("\nSent the Client hello.")
+        self.transport.write(clhello)
 
-    def validate(self, certificate):
-        cert = x509.load_pem_x509_certificate(certificate[0], default_backend())
-        if cert.Issuer == "C = US, ST = MD, L = Baltimore, O = JHUNetworkSecurityFall2017, OU = PETF, CN = 20174.1.666, emailAddress = vbollap1@jhu.edu":
-            pass
+
+    def validate(self, certificate0, certificate1, certificate2):
+        #cert = x509.load_pem_x509_certificate(str.encode(certificate[0]), default_backend())
+        cert1 = crypto.load_certificate(crypto.FILETYPE_PEM, certificate0)
+        clientIssuer = str(cert1.get_issuer())
+        IntermediateIssuer = "<X509Name object '/C=US/ST=MD/L=Baltimore/O=JHUNetworkSecurityFall2017/OU=PETF/CN=20174.1.666/emailAddress=vbollap1@jhu.edu'>"
+        if clientIssuer == IntermediateIssuer:
+            print("Issuer verified.\n")
+            try:
+                cert_store = crypto.X509Store()
+                certpub = crypto.load_certificate(crypto.FILETYPE_PEM, certificate1)
+                certroot = crypto.load_certificate(crypto.FILETYPE_PEM, certificate2)
+                cert_store.add_cert(certpub)
+                cert_store.add_cert(certroot)
+                print("Client certificates added to the trust store.\n")
+                store_ctx = crypto.X509StoreContext(cert_store, cert1)
+                store_ctx.verify_certificate()
+                return True
+            except Exception as e:
+                print(e)
+                return False
 
     def data_received(self, data):
         self.deserializer.update(data)
         for packet in self.deserializer.nextPackets():
-
             if isinstance(packet, PlsHello):
-                result = self.validate(packet.Certs)
-                clientkey = PlsKeyExchange()
-                clientkey.PreKey = os.urandom(16)
-                clientkey.NoncePlusOne = packet.Nonce + 1
-
+                print("\nReceived a packet. Trying to verify issuer...")
+                if self.validate(packet.Certs[0], packet.Certs[1], packet.Certs[2]):
+                    print("Certificate Validated. Sending Client Key Exchange!")
+                    clientkey = PlsKeyExchange()
+                    randomvalue = os.urandom(16)
+                    clientkey.PreKey = os.urandom(16)
+                    clientkey.NoncePlusOne = packet.Nonce + 1
 
 
     def connection_lost(self,exc):
