@@ -8,9 +8,11 @@ from playground.network.packet.fieldtypes import UINT32, STRING, UINT64, UINT16,
 from playground.network.packet.fieldtypes.attributes import Optional
 from playground.network.common.Protocol import StackingProtocol, StackingProtocolFactory, StackingTransport
 import os
+from base64 import b64decode
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 from OpenSSL import crypto
+import hashlib
 
 class BasePacketType(PacketType):
     DEFINITION_IDENTIFIER = "netsecfall2017.pls.basepacket"
@@ -21,7 +23,7 @@ class PlsHello(BasePacketType):
   DEFINITION_VERSION = "1.0"
   FIELDS = [
     ("Nonce", UINT64),
-    ("Certs", LIST(BUFFER))
+    ("Certs", LIST(STRING))
   ]
 
 class PlsKeyExchange(BasePacketType):
@@ -69,21 +71,36 @@ class PLSServer(StackingProtocol):
         print("###PLSServer connection made###")
         self.transport = transport
 
-    def validate(self, certificate):
-        cert = x509.load_pem_x509_certificate(certificate[0], default_backend())
-        if cert.Issuer == "C = US, ST = MD, L = Baltimore, O = JHUNetworkSecurityFall2017, OU = PETF, CN = 20174.1.666, emailAddress = vbollap1@jhu.edu":
-            cert_store = crypto.X509Store()
-            cert_store.add_cert(cert)
-            store_ctx = crypto.X509StoreContext(cert_store, cert)
-            store_ctx.verify_certificate()
-            return
+    def validate(self, certificate0, certificate1, certificate2):
+        #cert = x509.load_pem_x509_certificate(str.encode(certificate[0]), default_backend())
+        cert1 = crypto.load_certificate(crypto.FILETYPE_PEM, certificate0)
+        clientIssuer = str(cert1.get_issuer())
+        IntermediateIssuer = "<X509Name object '/C=US/ST=MD/L=Baltimore/O=JHUNetworkSecurityFall2017/OU=PETF/CN=20174.1.666/emailAddress=vbollap1@jhu.edu'>"
+        if clientIssuer == IntermediateIssuer:
+            print("Issuer verified.\n")
+            try:
+                cert_store = crypto.X509Store()
+                certpub = crypto.load_certificate(crypto.FILETYPE_PEM, certificate1)
+                certroot = crypto.load_certificate(crypto.FILETYPE_PEM, certificate2)
+                cert_store.add_cert(certpub)
+                cert_store.add_cert(certroot)
+                print("Client certificates added to the trust store.\n")
+                store_ctx = crypto.X509StoreContext(cert_store, cert1)
+                store_ctx.verify_certificate()
+                return True
+            except Exception as e:
+                print(e)
+                return False
 
     def data_received(self, data):
         print("###SSL layer data received called!###")
         self.deserializer.update(data)
         for packet in self.deserializer.nextPackets():
-            if packet.DEFINITION_IDENTIFIER == "netsecfall2017.pls.hello":
-                if self.validate(packet.Certs):
+            if isinstance(packet, PlsHello):
+                print("\nReceived a packet. Trying to verify issuer...")
+                if self.validate(packet.Certs[0], packet.Certs[1], packet.Certs[2]):
+                    print("Certificate Validated. Sending Server hello!")
+                    self.clientnonce = packet.Nonce
                     serverhello = PlsHello()
                     serverhello.Nonce = os.urandom(8)
                     idcert = getIDCertsForAddr()
@@ -92,14 +109,16 @@ class PLSServer(StackingProtocol):
                     serverhello.Certs.append(idcert)
                     serverhello.Certs.append(pubkey)
                     serverhello.Certs.append(root)
-                    packs = serverhello.__serialize__()
-                    self.transport.write(packs)
+                    srvhello = serverhello.__serialize__()
+                    self.transport.write(srvhello)
+
+            if isinstance(packet, PlsKeyExchange):
+                pass
 
     def connection_lost(self,exc):
         self.transport.close()
         self.loop.stop()
         self.transport = None
-
 
 if __name__ == "__main__":
 
