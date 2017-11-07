@@ -139,8 +139,19 @@ class PLSClient(StackingProtocol):
                     enc2 = enc1.encode()
                     clientkey.PreKey = enc2
                     ckey = clientkey.__serialize__()
-                    print("\nSent the Client Key Ecchange.")
+                    print("\nSent the Client Key Ecchange.\n\n")
                     self.transport.write(ckey)
+
+            if isinstance(packet, PlsKeyExchange):
+                print("Received Server Key Exchange.")
+                privkey = getPrivateKeyForAddr()
+                priv_key = RSA.importKey(privkey)
+                Data = packet.PreKey
+                Dataint = int(Data)
+                enc = (Dataint,)
+                dec_data = priv_key.decrypt(enc)
+                print("Decrypted Pre-Master Secret: ", dec_data)
+                #====================================
 
     def connection_lost(self,exc):
         self.transport.close()
