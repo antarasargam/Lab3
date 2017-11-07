@@ -74,6 +74,10 @@ class PLSServer(StackingProtocol):
 
     def validate(self, certificate0, certificate1, certificate2):
         #cert = x509.load_pem_x509_certificate(str.encode(certificate[0]), default_backend())
+        self.certificate = []
+        self.certificate.append(certificate0)
+        self.certificate.append(certificate1)
+        self.certificate.append(certificate2)
         cert1 = crypto.load_certificate(crypto.FILETYPE_PEM, certificate0)
         clientIssuer = str(cert1.get_issuer())
         IntermediateIssuer = "<X509Name object '/C=US/ST=MD/L=Baltimore/O=JHUNetworkSecurityFall2017/OU=PETF/CN=20174.1.666/emailAddress=vbollap1@jhu.edu'>"
@@ -124,6 +128,27 @@ class PLSServer(StackingProtocol):
                 enc = (Dataint,)
                 dec_data = priv_key.decrypt(enc)
                 print("Decrypted Pre-Master Secret: ", dec_data)
+                #====================================
+                #Creating Server Pre-Master
+                serverkey = PlsKeyExchange()
+                randomvalue = 1234567887659999
+                serverkey.NoncePlusOne = self.clientnonce + 1
+                cert1 = crypto.load_certificate(crypto.FILETYPE_PEM, self.certificate[0])
+                k = cert1.get_pubkey()
+                bio = crypto._new_mem_buf()
+                rsa = crypto._lib.EVP_PKEY_get1_RSA(k._pkey)
+                crypto._lib.PEM_write_bio_RSAPublicKey(bio, rsa)
+                s = crypto._bio_to_string(bio)
+                pubkey1 = s.decode()
+                pubkey = RSA.importKey(pubkey1)
+                pub_key = pubkey.publickey()
+                enc_data = pub_key.encrypt(randomvalue, self.clientnonce + 1)
+                enc1 = str(enc_data[0])
+                enc2 = enc1.encode()
+                serverkey.PreKey = enc2
+                ckey = serverkey.__serialize__()
+                print("\nSent the Server Key Exchange.")
+                self.transport.write(ckey)
 
     def connection_lost(self,exc):
         self.transport.close()
