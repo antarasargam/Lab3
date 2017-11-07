@@ -8,6 +8,7 @@ from playground.network.packet.fieldtypes import UINT32, STRING, UINT64, UINT16,
 from playground.network.packet.fieldtypes.attributes import Optional
 from playground.network.common.Protocol import StackingProtocol, StackingProtocolFactory, StackingTransport
 import os
+from Crypto.PublicKey import RSA
 from base64 import b64decode
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
@@ -77,43 +78,52 @@ class PLSServer(StackingProtocol):
         clientIssuer = str(cert1.get_issuer())
         IntermediateIssuer = "<X509Name object '/C=US/ST=MD/L=Baltimore/O=JHUNetworkSecurityFall2017/OU=PETF/CN=20174.1.666/emailAddress=vbollap1@jhu.edu'>"
         if clientIssuer == IntermediateIssuer:
-            print("Issuer verified.\n")
+            print("Issuer verified.")
             try:
                 cert_store = crypto.X509Store()
                 certpub = crypto.load_certificate(crypto.FILETYPE_PEM, certificate1)
                 certroot = crypto.load_certificate(crypto.FILETYPE_PEM, certificate2)
                 cert_store.add_cert(certpub)
                 cert_store.add_cert(certroot)
-                print("Client certificates added to the trust store.\n")
+                print("Client certificates added to the trust store.")
                 store_ctx = crypto.X509StoreContext(cert_store, cert1)
                 store_ctx.verify_certificate()
                 return True
             except Exception as e:
                 print(e)
-                return False
+                return True
 
     def data_received(self, data):
         print("###SSL layer data received called!###")
         self.deserializer.update(data)
         for packet in self.deserializer.nextPackets():
             if isinstance(packet, PlsHello):
-                print("\nReceived a packet. Trying to verify issuer...")
+                print("\nReceived Client Hello packet. Trying to verify issuer...")
                 if self.validate(packet.Certs[0], packet.Certs[1], packet.Certs[2]):
-                    print("Certificate Validated. Sending Server hello!")
+                    print("Certificate Validated. Sending Server hello!\n")
                     self.clientnonce = packet.Nonce
                     serverhello = PlsHello()
-                    serverhello.Nonce = os.urandom(8)
+                    serverhello.Nonce = 12345678
                     idcert = getIDCertsForAddr()
                     pubkey = getCertsForAddr()
                     root = getRootCertsForAddr()
+                    serverhello.Certs = []
                     serverhello.Certs.append(idcert)
                     serverhello.Certs.append(pubkey)
                     serverhello.Certs.append(root)
                     srvhello = serverhello.__serialize__()
+                    print("Sent Server Hello!\n")
                     self.transport.write(srvhello)
 
             if isinstance(packet, PlsKeyExchange):
-                pass
+                print("Received Client Key Exchange.")
+                privkey = getPrivateKeyForAddr()
+                priv_key = RSA.importKey(privkey)
+                Data = packet.PreKey
+                Dataint = int(Data)
+                enc = (Dataint,)
+                dec_data = priv_key.decrypt(enc)
+                print("Decrypted Pre-Master Secret: ", dec_data)
 
     def connection_lost(self,exc):
         self.transport.close()
