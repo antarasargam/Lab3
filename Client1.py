@@ -146,13 +146,20 @@ class PLSClient(StackingProtocol):
                 print("Decrypted Pre-Master Secret: ", decrypted)
                 #====================================
                 #sending digest
-                digest = self.m.digest()
-                print("Hash digest is: ", digest)
+                self.clientdigest = self.m.digest()
+                print("Hash digest is: ", self.clientdigest)
                 hdone = PlsHandshakeDone()
-                hdone.ValidationHash = digest
+                hdone.ValidationHash = self.clientdigest
                 hdone_s = hdone.__serialize__()
                 print("Sent the PLS Handshake Done to server.")
                 self.transport.write(hdone_s)
+
+            if isinstance(packet, PlsHandshakeDone):
+                print("\n\nReceived Server Handshake done message.")
+                if (self.clientdigest == packet.ValidationHash):
+                    print("Digest verification done!")
+
+
 
 
     def connection_lost(self,exc):
