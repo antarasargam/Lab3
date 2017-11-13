@@ -2,9 +2,10 @@
 
 import asyncio
 import playground
+import hashlib
 import random, zlib, logging
 from playground import getConnector
-from Certfactory import getIDCertsForAddr, getPrivateKeyForAddr, getPrivateKeyForAddrServer, getIDCertsForAddrServer, getCertsForAddr, getRootCertsForAddr
+from serverfactory import getPrivateKeyForAddr, getRootCertsForAddr, getCertsForAddr, getIDCertsForAddr
 from playground.network.packet import PacketType
 from playground.network.packet.fieldtypes import UINT32, STRING, UINT64, UINT16, UINT8, BUFFER, LIST
 from playground.network.packet.fieldtypes.attributes import Optional
@@ -78,10 +79,7 @@ class PLSServer(StackingProtocol):
         print("In Cert Validation")
         clientissuer = CipherUtil.getCertIssuer(certificate[0])
         clientsubject = CipherUtil.getCertSubject(certificate[0])
-        print("Client Issuer", clientissuer)
-        print("Client Subject", clientsubject)
         IntermediateIssuer = {'emailAddress': 'vbollap1@jhu.edu', 'stateOrProvinceName': 'MD', 'countryName': 'US', 'commonName': '20174.1.666', 'organizationalUnitName': 'PETF', 'localityName': 'Baltimore', 'organizationName': 'JHUNetworkSecurityFall2017'}
-
         if clientissuer == IntermediateIssuer:
                 print("Issuer verified.")
                 Certificate_result = CipherUtil.ValidateCertChainSigs(certificate)
@@ -92,23 +90,24 @@ class PLSServer(StackingProtocol):
                     return False
 
     def data_received(self, data):
-        print ("In Server Data Received")
         print("###SSL layer data received called!###")
         self.deserializer.update(data)
         for packet in self.deserializer.nextPackets():
             #print(packet.Certs[0], packet.Certs[1], packet.Certs[2])
-            self.incoming_cert.append(CipherUtil.getCertFromBytes(str.encode(packet.Certs[0])))
-            self.incoming_cert.append(CipherUtil.getCertFromBytes(str.encode(packet.Certs[1])))
-            self.incoming_cert.append(CipherUtil.getCertFromBytes(str.encode(packet.Certs[2])))
             if isinstance(packet, PlsHello):
+                self.incoming_cert.append(CipherUtil.getCertFromBytes(str.encode(packet.Certs[0])))
+                self.incoming_cert.append(CipherUtil.getCertFromBytes(str.encode(packet.Certs[1])))
+                self.incoming_cert.append(CipherUtil.getCertFromBytes(str.encode(packet.Certs[2])))
                 print("\nReceived Client Hello packet. Trying to verify issuer...")
                 #print(packet.Certs)
                 if self.validate(self.incoming_cert):
+                    self.m = hashlib.sha1()
+                    self.m.update(packet.__serialize__())
                     print("Certificate Validated. Sending Server hello!\n")
                     self.clientnonce = packet.Nonce
                     serverhello = PlsHello()
                     serverhello.Nonce = 12345678
-                    idcert = getIDCertsForAddrServer()
+                    idcert = getIDCertsForAddr()
                     pubkey = getCertsForAddr()
                     root = getRootCertsForAddr()
                     serverhello.Certs = []
@@ -117,35 +116,41 @@ class PLSServer(StackingProtocol):
                     serverhello.Certs.append(root)
                     srvhello = serverhello.__serialize__()
                     print("Sent Server Hello!\n")
+                    self.m.update(srvhello)
                     self.transport.write(srvhello)
 
             if isinstance(packet, PlsKeyExchange):
-                print("Received Client Key Exchange.")
-                serverpriv = CipherUtil.loadPrivateKeyFromPemFile("/root/antaraprivate")
-                print(serverpriv)
-                decrypted = serverpriv.decrypt(packet.PreKey, padding.OAEP(mgf=padding.MGF1(algorithm=hashes.SHA1()),algorithm=hashes.SHA1(), label=None))
+                print("Received Client Key Exchange. Server Server Keys\n\n")
+                self.m.update(packet.__serialize__())
+                serverpriv = CipherUtil.loadPrivateKeyFromPemFile("/root/keys/server/sagar-server.key")
+                decrypted = serverpriv.decrypt(packet.PreKey, padding.OAEP(mgf=padding.MGF1(algorithm=hashes.SHA256()),algorithm=hashes.SHA256(), label=None))
                 print("Decrypted Pre-Master Secret: ", decrypted)
                 #====================================
                 #Creating Server Pre-Master
                 serverkey = PlsKeyExchange()
-                randomvalue = 1234567887659999
+                randomvalue = b'1234567887654321'
                 serverkey.NoncePlusOne = self.clientnonce + 1
-                cert1 = crypto.load_certificate(crypto.FILETYPE_PEM, self.certificate[0])
-                k = cert1.get_pubkey()
-                bio = crypto._new_mem_buf()
-                rsa = crypto._lib.EVP_PKEY_get1_RSA(k._pkey)
-                crypto._lib.PEM_write_bio_RSAPublicKey(bio, rsa)
-                s = crypto._bio_to_string(bio)
-                pubkey1 = s.decode()
-                pubkey = RSA.importKey(pubkey1)
-                pub_key = pubkey.publickey()
-                enc_data = pub_key.encrypt(randomvalue, self.clientnonce + 1)
-                enc1 = str(enc_data[0])
-                enc2 = enc1.encode()
-                serverkey.PreKey = enc2
-                ckey = serverkey.__serialize__()
-                print("\nSent the Server Key Exchange.")
-                self.transport.write(ckey)
+                pub_key = self.incoming_cert[0].public_key()
+                encrypted1 = pub_key.encrypt(randomvalue, padding.OAEP(mgf=padding.MGF1(algorithm=hashes.SHA256()),algorithm=hashes.SHA256(), label=None))
+                print("Encrypted String is: ", encrypted1)
+                serverkey.PreKey = encrypted1
+                skey = serverkey.__serialize__()
+                print("Sent the Prekey to Client.")
+                self.m.update(skey)
+                self.transport.write(skey)
+
+            if isinstance(packet, PlsHandshakeDone):
+                print("Received Client Handshake done message.")
+                clientdigest = packet.ValidationHash
+                serverdigest = self.m.digest()
+                print("Hash digest is: ", serverdigest)
+                hdone = PlsHandshakeDone()
+                hdone.ValidationHash = serverdigest
+                if (serverdigest == clientdigest):
+                    print("The server digest matches the client digest.")
+                hdone_s = hdone.__serialize__()
+                self.transport.write(hdone_s)
+
 
     def connection_lost(self,exc):
         self.transport.close()
