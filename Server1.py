@@ -101,12 +101,14 @@ class PLSServer(StackingProtocol):
                 print("\nReceived Client Hello packet. Trying to verify issuer...")
                 #print(packet.Certs)
                 if self.validate(self.incoming_cert):
+                    self.nc = packet.Nonce
                     self.m = hashlib.sha1()
                     self.m.update(packet.__serialize__())
                     print("Certificate Validated. Sending Server hello!\n")
                     self.clientnonce = packet.Nonce
                     serverhello = PlsHello()
                     serverhello.Nonce = 12345678
+                    self.ns = serverhello.Nonce
                     idcert = getIDCertsForAddr()
                     pubkey = getCertsForAddr()
                     root = getRootCertsForAddr()
@@ -125,10 +127,12 @@ class PLSServer(StackingProtocol):
                 serverpriv = CipherUtil.loadPrivateKeyFromPemFile("/root/keys/server/sagar-server.key")
                 decrypted = serverpriv.decrypt(packet.PreKey, padding.OAEP(mgf=padding.MGF1(algorithm=hashes.SHA256()),algorithm=hashes.SHA256(), label=None))
                 print("Decrypted Pre-Master Secret: ", decrypted)
+                self.pkc = decrypted.decode()
                 #====================================
                 #Creating Server Pre-Master
                 serverkey = PlsKeyExchange()
                 randomvalue = b'1234567887654321'
+                self.pks = randomvalue.decode()
                 serverkey.NoncePlusOne = self.clientnonce + 1
                 pub_key = self.incoming_cert[0].public_key()
                 encrypted1 = pub_key.encrypt(randomvalue, padding.OAEP(mgf=padding.MGF1(algorithm=hashes.SHA256()),algorithm=hashes.SHA256(), label=None))
@@ -148,8 +152,42 @@ class PLSServer(StackingProtocol):
                 hdone.ValidationHash = serverdigest
                 if (serverdigest == clientdigest):
                     print("Digest verification done!")
+                    self.key_generator()
                 hdone_s = hdone.__serialize__()
                 self.transport.write(hdone_s)
+
+
+    def key_generator(self):
+        print("\n\nIn key_generator")
+        self.block0 = hashlib.sha1()
+        self.block0.update(b"PLS1.0")
+        self.block0.update(str(self.nc).encode())
+        self.block0.update(str(self.ns).encode())
+        self.block0.update(str(self.pkc).encode())
+        self.block0.update(str(self.pks).encode())
+        self.block0_digest = self.block0.digest()
+        print("Block 0 digest is: ", self.block0_digest)
+        block1 = hashlib.sha1()
+        block1.update(self.block0_digest)
+        block1digest =  block1.digest()
+        print("Block 1 digest is: ", block1digest)
+        block2 = hashlib.sha1()
+        block2.update(block1digest)
+        block2digest =  block2.digest()
+        print("Block 2 digest is: ", block2digest)
+        block3 = hashlib.sha1()
+        block3.update(block2digest)
+        block3digest =  block3.digest()
+        print("Block 3 digest is: ", block3digest)
+        block4 = hashlib.sha1()
+        block4.update(block3digest)
+        block4digest =  block4.digest()
+        print("Block 4 digest is: ", block4digest)
+        print(type(block1digest))
+        print("Block 1 digest decoded is: ", block1digest.hex())
+
+        concatenated = (self.block0_digest.decode() + block1digest.decode() + block2digest.decode() + block3digest.decode() + block4digest.decode())
+        print("Concatenated string is: ", concatenated)
 
 
     def connection_lost(self,exc):
