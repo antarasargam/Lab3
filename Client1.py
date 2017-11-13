@@ -2,13 +2,14 @@
 
 import asyncio
 import playground
+import hashlib
 import random, zlib, logging
 from playground import getConnector
 from playground.network.packet import PacketType
 from playground.network.packet.fieldtypes import UINT32, STRING, UINT64, UINT16, UINT8, BUFFER, LIST, ListFieldType
 from playground.network.packet.fieldtypes.attributes import Optional
 from playground.network.common.Protocol import StackingProtocol, StackingProtocolFactory, StackingTransport
-from Certfactory import getIDCertsForAddr, getPrivateKeyForAddr, getPrivateKeyForAddrServer, getIDCertsForAddrServer, getCertsForAddr, getRootCertsForAddr
+from clientfactory import getIDCertsForAddr, getCertsForAddr, getRootCertsForAddr, getPrivateKeyForAddr
 import os
 from playground.common import CipherUtil
 from cryptography.hazmat.primitives.asymmetric import padding, utils
@@ -91,6 +92,8 @@ class PLSClient(StackingProtocol):
         print(clienthello.Certs[1])
         clhello = clienthello.__serialize__()
         print("\nSent the Client hello.")
+        self.m = hashlib.sha1()
+        self.m.update(clhello)
         self.transport.write(clhello)
 
 
@@ -115,40 +118,42 @@ class PLSClient(StackingProtocol):
     def data_received(self, data):
         self.deserializer.update(data)
         for packet in self.deserializer.nextPackets():
-            self.incoming_cert.append(CipherUtil.getCertFromBytes(str.encode(packet.Certs[0])))
-            self.incoming_cert.append(CipherUtil.getCertFromBytes(str.encode(packet.Certs[1])))
-            self.incoming_cert.append(CipherUtil.getCertFromBytes(str.encode(packet.Certs[2])))
             if isinstance(packet, PlsHello):
+                self.incoming_cert.append(CipherUtil.getCertFromBytes(str.encode(packet.Certs[0])))
+                self.incoming_cert.append(CipherUtil.getCertFromBytes(str.encode(packet.Certs[1])))
+                self.incoming_cert.append(CipherUtil.getCertFromBytes(str.encode(packet.Certs[2])))
                 print("\nReceived Server Hello. Trying to verify issuer...")
                 if self.validate(self.incoming_cert):
+                    self.m.update(packet.__serialize__())
                     print(" Server Certificate Validated. Sending Client Key Exchange!\n")
                     clientkey = PlsKeyExchange()
                     randomvalue = b'1234567887654321'
-                    #clientkey.PreKey = os.urandom(16)
                     clientkey.NoncePlusOne = packet.Nonce + 1
-                    print ("HEREE")
                     pub_key = self.incoming_cert[0].public_key()
-                    print("Public key", pub_key)
-                    encrypted1 = pub_key.encrypt(randomvalue, padding.OAEP(mgf=padding.MGF1(algorithm=hashes.SHA1()),algorithm=hashes.SHA1(),label=None))
-                    print ("Ecrypted :",encrypted1)
+                    encrypted1 = pub_key.encrypt(randomvalue, padding.OAEP(mgf=padding.MGF1(algorithm=hashes.SHA256()),algorithm=hashes.SHA256(),label=None))
+                    print ("Encrypted String is: ",encrypted1)
                     clientkey.PreKey = encrypted1
-                    #serverpriv = CipherUtil.loadPrivateKeyFromPemFile("/root/antaraprivate")
-                    #print(serverpriv)
-                    #decrypted = serverpriv.decrypt(encrypted1, padding.OAEP(mgf=padding.MGF1(algorithm=hashes.SHA1()),algorithm=hashes.SHA1(),label=None))
-                    #print("decrypted", decrypted)
-                    print(clientkey)
-                    self.transport.write(clientkey.__serialize__())
+                    clkey = clientkey.__serialize__()
+                    print("Sent the Prekey to Server.")
+                    self.m.update(clkey)
+                    self.transport.write(clkey)
 
             if isinstance(packet, PlsKeyExchange):
                 print("Received Server Key Exchange.")
-                privkey = getPrivateKeyForAddr()
-                priv_key = RSA.importKey(privkey)
-                Data = packet.PreKey
-                Dataint = int(Data)
-                enc = (Dataint,)
-                dec_data = priv_key.decrypt(enc)
-                print("Decrypted Pre-Master Secret: ", dec_data)
+                self.m.update(packet.__serialize__())
+                serverpriv = CipherUtil.loadPrivateKeyFromPemFile("/root/keys/client/sagar-client.key")
+                decrypted = serverpriv.decrypt(packet.PreKey, padding.OAEP(mgf=padding.MGF1(algorithm=hashes.SHA256()),algorithm=hashes.SHA256(), label=None))
+                print("Decrypted Pre-Master Secret: ", decrypted)
                 #====================================
+                #sending digest
+                digest = self.m.digest()
+                print("Hash digest is: ", digest)
+                hdone = PlsHandshakeDone()
+                hdone.ValidationHash = digest
+                hdone_s = hdone.__serialize__()
+                print("Sent the PLS Handshake Done to server.")
+                self.transport.write(hdone_s)
+
 
     def connection_lost(self,exc):
         self.transport.close()
