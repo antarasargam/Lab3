@@ -82,6 +82,7 @@ class PLSClient(StackingProtocol):
         self.transport = transport
         clienthello = PlsHello()
         clienthello.Nonce = 12345678
+        self.nc = clienthello.Nonce
         idcert = getIDCertsForAddr()
         pubkey = getCertsForAddr()
         root = getRootCertsForAddr()
@@ -89,7 +90,6 @@ class PLSClient(StackingProtocol):
         clienthello.Certs.append(idcert)
         clienthello.Certs.append(pubkey)
         clienthello.Certs.append(root)
-        print(clienthello.Certs[1])
         clhello = clienthello.__serialize__()
         print("\nSent the Client hello.")
         self.m = hashlib.sha1()
@@ -128,7 +128,10 @@ class PLSClient(StackingProtocol):
                     print(" Server Certificate Validated. Sending Client Key Exchange!\n")
                     clientkey = PlsKeyExchange()
                     randomvalue = b'1234567887654321'
+                    print(type(randomvalue))
+                    self.pkc = randomvalue.decode()
                     clientkey.NoncePlusOne = packet.Nonce + 1
+                    self.ns = packet.Nonce
                     pub_key = self.incoming_cert[0].public_key()
                     encrypted1 = pub_key.encrypt(randomvalue, padding.OAEP(mgf=padding.MGF1(algorithm=hashes.SHA256()),algorithm=hashes.SHA256(),label=None))
                     print ("Encrypted String is: ",encrypted1)
@@ -144,6 +147,7 @@ class PLSClient(StackingProtocol):
                 serverpriv = CipherUtil.loadPrivateKeyFromPemFile("/root/keys/client/sagar-client.key")
                 decrypted = serverpriv.decrypt(packet.PreKey, padding.OAEP(mgf=padding.MGF1(algorithm=hashes.SHA256()),algorithm=hashes.SHA256(), label=None))
                 print("Decrypted Pre-Master Secret: ", decrypted)
+                self.pks = decrypted.decode()
                 #====================================
                 #sending digest
                 self.clientdigest = self.m.digest()
@@ -158,8 +162,18 @@ class PLSClient(StackingProtocol):
                 print("\n\nReceived Server Handshake done message.")
                 if (self.clientdigest == packet.ValidationHash):
                     print("Digest verification done!")
+                    self.key_generator()
 
-
+    def key_generator(self):
+        print("\n\nIn key_generator")
+        self.block0 = hashlib.sha1()
+        self.block0.update(b"PLS1.0")
+        self.block0.update(str(self.nc).encode())
+        self.block0.update(str(self.ns).encode())
+        self.block0.update(str(self.pkc).encode())
+        self.block0.update(str(self.pks).encode())
+        self.block0_digest = self.block0.digest()
+        print("Block 0 digest is: ", self.block0_digest)
 
 
     def connection_lost(self,exc):
