@@ -135,7 +135,7 @@ class PLSServer(StackingProtocol):
                 print("Encrypted String is: ", encrypted1)
                 serverkey.PreKey = encrypted1
                 skey = serverkey.__serialize__()
-                print("Sent the Prekey to Client.")
+                print("Sent the Prekey to Client.\n\n")
                 self.m.update(skey)
                 self.transport.write(skey)
 
@@ -147,7 +147,7 @@ class PLSServer(StackingProtocol):
                 hdone = PlsHandshakeDone()
                 hdone.ValidationHash = serverdigest
                 if (serverdigest == clientdigest):
-                    print("The server digest matches the client digest.")
+                    print("Digest verification done!")
                 hdone_s = hdone.__serialize__()
                 self.transport.write(hdone_s)
 
