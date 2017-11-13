@@ -2,7 +2,7 @@
 
 import asyncio
 import playground
-import hashlib
+import hashlib, sys, binascii
 import random, zlib, logging
 from playground import getConnector
 from serverfactory import getPrivateKeyForAddr, getRootCertsForAddr, getCertsForAddr, getIDCertsForAddr
@@ -74,6 +74,9 @@ class PLSServer(StackingProtocol):
     def connection_made(self, transport):
         print("###PLSServer connection made###")
         self.transport = transport
+
+    def utf8len(self, s):
+        return len(s.encode('utf-8'))
 
     def validate(self, certificate):
         print("In Cert Validation")
@@ -169,7 +172,7 @@ class PLSServer(StackingProtocol):
         print("Block 0 digest is: ", self.block0_digest)
         block1 = hashlib.sha1()
         block1.update(self.block0_digest)
-        block1digest =  block1.digest()
+        block1digest = block1.digest()
         print("Block 1 digest is: ", block1digest)
         block2 = hashlib.sha1()
         block2.update(block1digest)
@@ -183,12 +186,30 @@ class PLSServer(StackingProtocol):
         block4.update(block3digest)
         block4digest =  block4.digest()
         print("Block 4 digest is: ", block4digest)
-        print(type(block1digest))
+        print("Block 0 digest decoded is: ", self.block0_digest.hex())
         print("Block 1 digest decoded is: ", block1digest.hex())
+        print("Block 2 digest decoded is: ", block2digest.hex())
+        print("Block 1 digest decoded is: ", block3digest.hex())
+        print("Block 1 digest decoded is: ", block4digest.hex())
 
-        concatenated = (self.block0_digest.decode() + block1digest.decode() + block2digest.decode() + block3digest.decode() + block4digest.decode())
+        concatenated = (self.block0_digest + block1digest + block2digest + block3digest + block4digest).hex()
         print("Concatenated string is: ", concatenated)
+        print("Concatenated string size is: ", self.utf8len(concatenated),"bytes")
+        binary_string = bin(int(concatenated, 16))[2:]
+        print("Value of concatenated string in bits is: ", binary_string)
 
+        self.ekc = binary_string[:128]
+        self.eks = binary_string[128:256]
+        self.ivc = binary_string[256:384]
+        self.ivs = binary_string[384:512]
+        self.mkc = binary_string[512:640]
+        self.mks = binary_string[640:768]
+        print("Value of Ekc is: ", self.ekc)
+        print("Value of Eks is: ", self.eks)
+        print("Value of ivc is: ", self.ivc)
+        print("Value of ivs is: ", self.ivs)
+        print("Value of mkc is: ", self.mkc)
+        print("Value of mks is: ", self.mks)
 
     def connection_lost(self,exc):
         self.transport.close()
